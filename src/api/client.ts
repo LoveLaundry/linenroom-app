@@ -3,14 +3,16 @@ import { clearSession, getToken } from '../session'
 
 /** Sign-in, session status, and hotel client auth. */
 export const authApi = axios.create({
-  baseURL: import.meta.env.VITE_USER_API_URL ?? 'http://localhost:8002',
+  // Same origin in production: nginx proxies /api/user to user-service.
+  baseURL: import.meta.env.VITE_USER_API_URL ?? '/api/user',
   timeout: 10000,
   headers: { 'Content-Type': 'application/json' },
 })
 
 /** Operational data (bills, gate passes, linens, ...). */
 export const dataApi = axios.create({
-  baseURL: import.meta.env.VITE_BILL_API_URL ?? 'http://localhost:8001',
+  // Same origin in production: nginx proxies /api/bills to bill_service.
+  baseURL: import.meta.env.VITE_BILL_API_URL ?? '/api/bills',
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 })

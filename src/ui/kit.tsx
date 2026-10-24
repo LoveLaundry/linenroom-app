@@ -19,8 +19,8 @@ export function Stat({ label, value, hint }: { label: string; value: string; hin
   )
 }
 
-export function Panel({ children }: { children: ReactNode }) {
-  return <div className="rounded-2xl border border-slate-200 bg-white p-5">{children}</div>
+export function Panel({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={className ? `rounded-2xl border border-slate-200 bg-white ${className}` : "rounded-2xl border border-slate-200 bg-white p-5"}>{children}</div>
 }
 
 export function StateBox({
