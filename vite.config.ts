@@ -9,6 +9,14 @@ export default defineConfig({
     port: 5176,
     // Two apps open at once must not fight over the same port.
     strictPort: true,
+    // In development the page and the API must share an origin, otherwise the
+    // browser blocks the call: the services only allow http://localhost:5173
+    // and :3000, not this port. Proxying /api to the same host the deployed
+    // site uses keeps the request paths identical in dev and production
+    // (/api/user/auth/login), so nothing is rewritten for the app's benefit.
+    proxy: {
+      '/api': { target: 'http://localhost', changeOrigin: true },
+    },
   },
   build: {
     rollupOptions: {
