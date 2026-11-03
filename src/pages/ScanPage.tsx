@@ -68,6 +68,19 @@ export function ScanPage() {
     void lookup(decoded)
   })
 
+  // Start only once the preview is in the tree. Calling start() from the click
+  // handler raced the render: the hook could acquire the stream before the
+  // <video> existed and then release it again, so the camera opened and closed
+  // without ever decoding a frame.
+  const { start: startCamera, stop: stopCamera } = scan
+  useEffect(() => {
+    if (!cameraOpen) {
+      stopCamera()
+      return
+    }
+    void startCamera()
+  }, [cameraOpen, startCamera, stopCamera])
+
   /**
    * Re-read the displayed piece when another session changes it.
    *
@@ -152,15 +165,7 @@ export function ScanPage() {
         </button>
         <button
           type="button"
-          onClick={() => {
-            if (cameraOpen) {
-              scan.stop()
-              setCameraOpen(false)
-            } else {
-              setCameraOpen(true)
-              void scan.start()
-            }
-          }}
+          onClick={() => setCameraOpen((open) => !open)}
           className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50"
         >
           {cameraOpen ? 'Stop camera' : 'Camera'}
@@ -173,6 +178,7 @@ export function ScanPage() {
             <video
               ref={scan.videoRef}
               muted
+              autoPlay
               playsInline
               className="aspect-video w-full object-cover"
             />
@@ -182,10 +188,13 @@ export function ScanPage() {
           </div>
           <p className="mt-3 text-xs text-slate-500">
             {scan.state === 'scanning'
-              ? 'Hold the tag inside the frame.'
+              ? 'Hold the tag inside the frame. Scanned codes fill the field above.'
               : scan.state === 'starting'
                 ? 'Starting the camera…'
                 : (scan.message ?? 'Camera idle.')}
+            {scan.state === 'scanning' && scan.decoder
+              ? ` Decoder: ${scan.decoder === 'native' ? 'browser' : 'built-in'}.`
+              : ''}
           </p>
         </Panel>
       ) : null}

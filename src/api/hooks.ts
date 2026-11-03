@@ -57,7 +57,7 @@ export function useQuery<T>(path: string, params?: Params): QueryResult<T> {
  * One poller is shared by every mounted component: five screens subscribing
  * must not mean five requests every tick.
  */
-const LIVE_POLL_MS = 3000
+const LIVE_POLL_MS = 1000
 
 let clockValue: number | null = null
 let pollTimer: number | undefined
@@ -65,9 +65,26 @@ let pollStarted = false
 let pollInFlight = false
 const listeners = new Set<(clock: number) => void>()
 
-function notify(next: number): void {
+/**
+ * Tabs and windows on the same browser share the counter over a channel, so a
+ * scan in one updates the other without waiting for the next poll. This does
+ * nothing across devices — that is the poll's job — but it removes the most
+ * visible lag, which is two windows side by side on one machine.
+ */
+const channel =
+  typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('lovelaundry-live') : null
+
+function notify(next: number, broadcast = true): void {
   clockValue = next
   for (const listener of listeners) listener(next)
+  if (broadcast) channel?.postMessage(next)
+}
+
+if (channel) {
+  channel.addEventListener('message', (event: MessageEvent) => {
+    const next = Number(event.data)
+    if (Number.isFinite(next) && next !== clockValue) notify(next, false)
+  })
 }
 
 function schedulePoll(): void {
@@ -102,6 +119,18 @@ function ensurePoller(): void {
   if (pollStarted) return
   pollStarted = true
   schedulePoll()
+  // A hidden tab stops polling; coming back must not wait a full interval for
+  // the first update, or the screen looks stale exactly when someone returns to
+  // it. Both events are used because focus does not fire for a background tab
+  // restored from the tab strip in every browser.
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshLiveClock()
+    })
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', () => refreshLiveClock())
+  }
 }
 
 /** Force an immediate clock check, e.g. right after this tab mutates data. */
