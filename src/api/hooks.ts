@@ -48,6 +48,115 @@ export function useQuery<T>(path: string, params?: Params): QueryResult<T> {
   return { data, error, loading, reload: () => void load() }
 }
 
+/* ── live clock ──────────────────────────────────────────────────────────────
+ * The API increments a per-laundry counter on every linen mutation and exposes
+ * it at GET /linens/live-clock. Screens poll that counter and refetch the
+ * moment it moves, which is what makes a scan on one device appear on another
+ * without a manual refresh.
+ *
+ * One poller is shared by every mounted component: five screens subscribing
+ * must not mean five requests every tick.
+ */
+const LIVE_POLL_MS = 3000
+
+let clockValue: number | null = null
+let pollTimer: number | undefined
+let pollStarted = false
+let pollInFlight = false
+const listeners = new Set<(clock: number) => void>()
+
+function notify(next: number): void {
+  clockValue = next
+  for (const listener of listeners) listener(next)
+}
+
+function schedulePoll(): void {
+  if (pollTimer !== undefined) window.clearTimeout(pollTimer)
+  pollTimer = window.setTimeout(() => void pollOnce(), LIVE_POLL_MS)
+}
+
+async function pollOnce(): Promise<void> {
+  if (pollInFlight) return
+  // A hidden tab has no one watching; polling it just burns requests.
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+    schedulePoll()
+    return
+  }
+  pollInFlight = true
+  try {
+    const response = await dataApi.get<{ clock?: number }>('/linens/live-clock')
+    const next = Number(response.data?.clock ?? 0)
+    if (!Number.isFinite(next)) return
+    // Only notify on a real change, otherwise every consumer refetches every tick.
+    if (clockValue === null || next !== clockValue) notify(next)
+  } catch {
+    // A failed poll is not worth surfacing: the next tick retries, and the
+    // screen's own error state already covers a genuinely broken connection.
+  } finally {
+    pollInFlight = false
+    schedulePoll()
+  }
+}
+
+function ensurePoller(): void {
+  if (pollStarted) return
+  pollStarted = true
+  schedulePoll()
+}
+
+/** Force an immediate clock check, e.g. right after this tab mutates data. */
+export function refreshLiveClock(): void {
+  if (pollTimer !== undefined) window.clearTimeout(pollTimer)
+  void pollOnce()
+}
+
+/** The current per-laundry revision, or null before the first successful poll. */
+export function useLiveClock(): number | null {
+  const [clock, setClock] = useState<number | null>(clockValue)
+
+  useEffect(() => {
+    const listener = (next: number) => setClock(next)
+    listeners.add(listener)
+    ensurePoller()
+    if (clockValue !== null) setClock(clockValue)
+    return () => {
+      listeners.delete(listener)
+    }
+  }, [])
+
+  return clock
+}
+
+/**
+ * `useQuery` plus live refresh: refetches whenever another session scans,
+ * updates or deletes a linen in this laundry.
+ */
+export function useLiveQuery<T>(path: string, params?: Params): QueryResult<T> {
+  const result = useQuery<T>(path, params)
+  const clock = useLiveClock()
+
+  // The clock seen at first load is the baseline; only a later value means
+  // somebody changed something. Capturing it in a ref keeps the effect from
+  // refetching on every render.
+  const baseline = useRef<number | null>(null)
+  const reloadRef = useRef(result.reload)
+  reloadRef.current = result.reload
+
+  useEffect(() => {
+    if (clock === null) return
+    if (baseline.current === null) {
+      baseline.current = clock
+      return
+    }
+    if (clock !== baseline.current) {
+      baseline.current = clock
+      reloadRef.current()
+    }
+  }, [clock])
+
+  return result
+}
+
 export function formatMoney(value: number | string | null | undefined, currency = 'LKR'): string {
   const amount = typeof value === 'string' ? Number(value) : (value ?? 0)
   if (!Number.isFinite(amount)) return '—'

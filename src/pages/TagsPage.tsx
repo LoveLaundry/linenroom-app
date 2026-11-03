@@ -1,10 +1,18 @@
 import { useState, type FormEvent } from 'react'
 import { dataApi, errorMessage } from '../api/client'
+import { refreshLiveClock } from '../api/hooks'
 import { PageHeader, Panel } from '../ui/kit'
 
 interface GeneratedTag {
   linen_id?: string
   id?: string
+}
+
+/** The API answers {items, count}; tolerate a bare array from older builds. */
+function readTags(payload: unknown): GeneratedTag[] {
+  if (Array.isArray(payload)) return payload as GeneratedTag[]
+  const items = (payload as { items?: unknown } | null)?.items
+  return Array.isArray(items) ? (items as GeneratedTag[]) : []
 }
 
 export function TagsPage() {
@@ -37,7 +45,10 @@ export function TagsPage() {
         quantity: count,
         size: size.trim() || undefined,
       })
-      setCreated(Array.isArray(response.data) ? response.data : [])
+      const tags = readTags(response.data)
+      setCreated(tags)
+      // New pieces are immediately scannable; let the other screens see them.
+      refreshLiveClock()
     } catch (caught) {
       setError(errorMessage(caught))
     } finally {
@@ -65,10 +76,27 @@ export function TagsPage() {
         ) : null}
 
         {created ? (
-          <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-            Created {created.length} tag{created.length === 1 ? '' : 's'}. They are now in inventory
-            with status IN STOCK and can be scanned straight away.
-          </p>
+          <Panel>
+            <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              Created {created.length} tag{created.length === 1 ? '' : 's'}. They are now in
+              inventory with status IN STOCK and can be scanned straight away.
+            </p>
+            {created.length ? (
+              <div className="mt-4">
+                <p className="mb-2 text-sm font-medium text-slate-700">Tag codes</p>
+                <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {created.map((tag, index) => (
+                    <li
+                      key={tag.id ?? tag.linen_id ?? index}
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-center font-mono text-sm tracking-wide"
+                    >
+                      {tag.linen_id ?? '—'}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </Panel>
         ) : null}
 
         <button

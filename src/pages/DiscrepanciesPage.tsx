@@ -1,4 +1,4 @@
-import { useQuery } from '../api/hooks'
+import { useLiveQuery } from '../api/hooks'
 import { PageHeader, Panel, StateBox } from '../ui/kit'
 
 interface LinenStats {
@@ -31,7 +31,7 @@ const CIRCUIT = [
 ] as const
 
 export function DiscrepanciesPage() {
-  const { data, error, loading, reload } = useQuery<LinenStats>('/linens/stats/summary')
+  const { data, error, loading, reload } = useLiveQuery<LinenStats>('/linens/stats/summary')
 
   return (
     <>

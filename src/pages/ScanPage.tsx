@@ -1,5 +1,7 @@
-import { useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { dataApi, errorMessage } from '../api/client'
+import { refreshLiveClock, useLiveClock } from '../api/hooks'
+import { useQrScanner } from '../camera/useQrScanner'
 import { PageHeader, Panel, StatusChip } from '../ui/kit'
 
 interface Linen {
@@ -12,6 +14,7 @@ interface Linen {
   condition: string
   location?: string | null
   wash_count?: number
+  last_scanned_date?: string | null
 }
 
 /** The statuses a scan may move a piece to, exactly as the API defines them. */
@@ -33,23 +36,73 @@ export function ScanPage() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [cameraOpen, setCameraOpen] = useState(false)
 
-  async function lookup(event: FormEvent) {
-    event.preventDefault()
-    const trimmed = code.trim()
-    if (!trimmed || busy) return
+  // Kept in a ref so the live-refresh effect can read the currently displayed
+  // doc without re-subscribing every time the record changes.
+  const shownIdRef = useRef<string | null>(null)
+  shownIdRef.current = linen?.id ?? null
+
+  /** Load a tag straight from the API. Used by both the form and the camera. */
+  const lookup = useCallback(async (raw: string) => {
+    const trimmed = raw.trim()
+    if (!trimmed) return
     setBusy(true)
     setError(null)
     setNotice(null)
-    setLinen(null)
     try {
-      const response = await dataApi.get<Linen>(`/linens/by-code/${encodeURIComponent(trimmed)}`)
+      const response = await dataApi.get<Linen>(
+        `/linens/by-code/${encodeURIComponent(trimmed)}`,
+      )
       setLinen(response.data)
     } catch (caught) {
+      setLinen(null)
       setError(errorMessage(caught))
     } finally {
       setBusy(false)
     }
+  }, [])
+
+  const scan = useQrScanner((decoded) => {
+    setCode(decoded)
+    void lookup(decoded)
+  })
+
+  /**
+   * Re-read the displayed piece when another session changes it.
+   *
+   * The scan endpoint already returns the updated record, so this only matters
+   * for changes made elsewhere — a second scanner, or the management app.
+   */
+  const clock = useLiveClock()
+  const seenClock = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (clock === null) return
+    if (seenClock.current === null) {
+      seenClock.current = clock
+      return
+    }
+    if (clock === seenClock.current) return
+    seenClock.current = clock
+
+    const id = shownIdRef.current
+    if (!id) return
+    void (async () => {
+      try {
+        const response = await dataApi.get<Linen>(`/linens/${id}`)
+        setLinen(response.data)
+      } catch {
+        // The piece may have been deleted by whoever moved the clock; leave the
+        // screen as-is and let the next explicit lookup report it.
+      }
+    })()
+  }, [clock])
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    if (busy) return
+    void lookup(code)
   }
 
   async function apply(action: string) {
@@ -58,13 +111,17 @@ export function ScanPage() {
     setError(null)
     setNotice(null)
     try {
-      const response = await dataApi.post<{ status?: string }>(`/linens/${linen.id}/scan`, {
-        action,
-      })
-      const nextStatus = response.data?.status ?? action
-      setLinen({ ...linen, status: nextStatus })
+      const response = await dataApi.post<Linen>(`/linens/${linen.id}/scan`, { action })
+      // Trust the server's record rather than patching the local copy: the
+      // response carries the real status plus wash_count and timestamps that a
+      // local merge would silently lose.
+      if (response.data?.id) {
+        setLinen(response.data)
+      }
       setNotice(`Applied "${action}" to ${linen.linen_id}.`)
       setCode('')
+      // Nudge other screens immediately instead of waiting for their next poll.
+      refreshLiveClock()
     } catch (caught) {
       setError(errorMessage(caught))
     } finally {
@@ -76,12 +133,14 @@ export function ScanPage() {
     <>
       <PageHeader title="Scan" subtitle="Look up a tag, then move the piece on" />
 
-      <form onSubmit={lookup} className="mb-4 flex gap-2">
+      <form onSubmit={submit} className="mb-4 flex gap-2">
         <input
           value={code}
           onChange={(event) => setCode(event.target.value)}
-          placeholder="Scan or type a tag, e.g. LL-000123"
+          placeholder="Scan or type a tag, e.g. LL-7K4P92"
           autoFocus
+          autoComplete="off"
+          spellCheck={false}
           className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm uppercase outline-none focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10"
         />
         <button
@@ -91,7 +150,45 @@ export function ScanPage() {
         >
           {busy ? 'Working…' : 'Find'}
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (cameraOpen) {
+              scan.stop()
+              setCameraOpen(false)
+            } else {
+              setCameraOpen(true)
+              void scan.start()
+            }
+          }}
+          className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-semibold hover:bg-slate-50"
+        >
+          {cameraOpen ? 'Stop camera' : 'Camera'}
+        </button>
       </form>
+
+      {cameraOpen ? (
+        <Panel>
+          <div className="relative overflow-hidden rounded-xl bg-slate-950">
+            <video
+              ref={scan.videoRef}
+              muted
+              playsInline
+              className="aspect-video w-full object-cover"
+            />
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div className="h-40 w-40 rounded-2xl border-2 border-white/70 shadow-[0_0_0_9999px_rgba(2,6,23,0.35)]" />
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-slate-500">
+            {scan.state === 'scanning'
+              ? 'Hold the tag inside the frame.'
+              : scan.state === 'starting'
+                ? 'Starting the camera…'
+                : (scan.message ?? 'Camera idle.')}
+          </p>
+        </Panel>
+      ) : null}
 
       {error ? (
         <p role="alert" className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -100,7 +197,9 @@ export function ScanPage() {
       ) : null}
 
       {notice ? (
-        <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>
+        <p className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {notice}
+        </p>
       ) : null}
 
       {linen ? (

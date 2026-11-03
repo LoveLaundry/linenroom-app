@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery } from '../api/hooks'
+import { useLiveQuery } from '../api/hooks'
 import { PageHeader, StateBox, StatusChip, Table } from '../ui/kit'
 
 interface Linen {
@@ -36,7 +36,7 @@ export function InventoryPage() {
   const [search, setSearch] = useState('')
   const [applied, setApplied] = useState('')
 
-  const { data, error, loading, reload } = useQuery<Response>('/linens', {
+  const { data, error, loading, reload } = useLiveQuery<Response>('/linens', {
     limit: 100,
     status: status || undefined,
     search: applied || undefined,
